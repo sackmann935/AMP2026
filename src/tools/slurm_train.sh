@@ -38,7 +38,7 @@ fi
 #   PROFILE=naive_smoke
 #   PROFILE=topk_chunked_smoke
 #   PROFILE=gaussian_topk_chunked_e6_s06
-PROFILE=${PROFILE:-gaussian_topk_chunked_e20_s06_regularized}
+PROFILE=${PROFILE:-gaussian_topk_chunked_e20_s06_regularized_cosine}
 
 case "$PROFILE" in
   baseline)
@@ -107,9 +107,9 @@ case "$PROFILE" in
       model.camera.lift_mode=topk_chunked
       model.camera.debug.enabled=true model.camera.debug.log_memory=true)
     ;;
-  gaussian_topk_chunked_e20_s06_regularized)
+  gaussian_topk_chunked_e20_s06_regularized_cosine)
     CMD=(python -u src/tools/train.py
-      exp_id=gaussian_topk_chunked_regularized
+      exp_id=gaussian_topk_chunked_regularized_cosine
       epochs=20 batch_size=2 num_workers=2
       model.middle_encoder.type=gaussian_soft
       model.fusion.enabled=true model.fusion.type=cmx_lite

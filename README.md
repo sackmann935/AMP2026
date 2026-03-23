@@ -25,7 +25,7 @@ Implemented components:
   - CenterPoint head for 3 classes (`Car`, `Pedestrian`, `Cyclist`).
 - Training stack:
   - Hydra configs + PyTorch Lightning training loop.
-  - AdamW optimizer.
+  - AdamW optimizer with step-wise linear warmup + cosine decay scheduler.
   - Validation logging and checkpointing based on `validation/entire_area/mAP`.
 
 ## Current Experiment Profile
@@ -38,6 +38,17 @@ This profile currently uses:
 - `model.fusion.type=cmx_lite`
 - `model.camera.lift_mode=topk_chunked`
 - `epochs=20`, `batch_size=2`
+
+## Current Regularization
+Current regularization implemented in code/config:
+- Optimizer: `AdamW` with non-zero `weight_decay` (`src/config/model/centerpoint_radar.yaml`).
+- LR schedule: linear warmup + cosine decay (implemented in `src/model/detector/centerpoint.py`, configured under `optimizer.scheduler`).
+- Checkpoint regularization-by-selection: top-k model checkpoints are tracked by `validation/entire_area/mAP`.
+
+Current gaps (not yet implemented):
+- No explicit dropout/drop-path in camera/fusion/head blocks.
+- No data augmentation pipeline in `src/dataset/view_of_delft.py`.
+- No early stopping callback yet.
 
 ## Project Layout
 - `src/tools/train.py` - training entrypoint
@@ -91,17 +102,14 @@ PROFILE=gaussian_topk_chunked_e20_s06_regularized bash src/tools/slurm_train.sh
 ```
 
 ## Current TODOs
-Primary TODO: **regularization to reduce overfitting and close the train/val loss gap**.
+Primary TODO: **improve generalization after adding scheduler regularization**.
 
 Planned next steps:
+- Keep warmup+cosine scheduler and tune its hyperparameters (`warmup_epochs`, `min_lr_ratio`) together with `lr` and `weight_decay`.
 - Add explicit model regularization (dropout/drop-path candidates in camera encoder, fusion blocks, and head).
-- Tune optimizer regularization beyond current weight decay (schedule + sweep for `lr` and `weight_decay`).
 - Add stronger data augmentation/perturbation for radar and camera branches.
-- Add early-stopping or stricter checkpoint selection criteria based on validation trends.
-- Track and compare:
-  - training loss vs validation loss
-  - per-class validation AP (Car/Pedestrian/Cyclist)
-  - ROI mAP vs entire-area mAP
+- Add early-stopping based on `validation/entire_area/mAP` to stop after the peak epoch.
+- Track and compare: training loss vs validation loss, per-class validation AP, ROI mAP vs entire-area mAP.
 
 ## Short Status
 - Baseline training/eval/test scripts are in place and working.

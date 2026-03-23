@@ -133,5 +133,10 @@ head:
 
 # optimizer==>ADAMW
 optimizer:
-  lr: 6e-4 #0.001
-  weight_decay: 0.02
+  lr: 1e-3 #0.001
+  weight_decay: 0.01
+  scheduler:
+    enabled: TRUE
+    warmup_epochs: 1.0
+    warmup_steps: 0 # if >0, overrides warmup_epochs
+    min_lr_ratio: 0.05

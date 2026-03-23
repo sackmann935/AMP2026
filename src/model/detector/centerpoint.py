@@ -1,6 +1,7 @@
 import os
 import tempfile
 import pickle
+import math
 from datetime import datetime
 
 import numpy as np 
@@ -208,8 +209,49 @@ class CenterPoint(L.LightningModule):
         return loss
     
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), **self.optimizer_config)
-        return optimizer
+        optimizer_cfg = dict(self.optimizer_config or {})
+        scheduler_cfg = optimizer_cfg.pop('scheduler', None)
+        optimizer = torch.optim.AdamW(self.parameters(), **optimizer_cfg)
+
+        if not scheduler_cfg or not bool(scheduler_cfg.get('enabled', False)):
+            return optimizer
+
+        total_steps = int(getattr(self.trainer, 'estimated_stepping_batches', 0) or 0)
+        if total_steps <= 0:
+            return optimizer
+
+        warmup_steps = int(scheduler_cfg.get('warmup_steps', 0) or 0)
+        if warmup_steps <= 0:
+            warmup_epochs = float(scheduler_cfg.get('warmup_epochs', 0.0) or 0.0)
+            if warmup_epochs > 0:
+                steps_per_epoch = int(getattr(self.trainer, 'num_training_batches', 0) or 0)
+                warmup_steps = int(round(warmup_epochs * steps_per_epoch))
+
+        warmup_steps = max(0, min(warmup_steps, max(0, total_steps - 1)))
+        decay_steps = max(1, total_steps - warmup_steps)
+
+        min_lr_ratio = float(scheduler_cfg.get('min_lr_ratio', 0.05))
+        min_lr_ratio = max(0.0, min(1.0, min_lr_ratio))
+
+        def lr_lambda(step):
+            if warmup_steps > 0 and step < warmup_steps:
+                return max(float(step + 1) / float(warmup_steps), 1e-8)
+
+            progress = float(step - warmup_steps) / float(decay_steps)
+            progress = max(0.0, min(1.0, progress))
+            cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+        return {
+            'optimizer': optimizer,
+            'lr_scheduler': {
+                'scheduler': scheduler,
+                'interval': 'step',
+                'frequency': 1,
+                'name': 'lr-cosine-warmup',
+            },
+        }
     
     
     def validation_step(self, batch, batch_idx):
