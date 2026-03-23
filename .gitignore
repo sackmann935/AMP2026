@@ -1,0 +1,36 @@
+# Data and experiment outputs
+data/
+outputs/
+src/tools/recovered_slurm_history/
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Build/distribution artifacts
+build/
+dist/
+*.egg-info/
+
+# Logs and runtime artifacts
+*.log
+*.out
+*.err
+
+# Model/checkpoint artifacts
+*.ckpt
+*.pt
+*.pth
+*.onnx
+
+# Editor/system files
+.DS_Store
+.idea/
+.vscode/
