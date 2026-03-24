@@ -16,7 +16,8 @@ class_namses: ['Car', 'Pedestrian', 'Cyclist']
 num_workers: 2
 val_num_workers: 0
 gpus: [0] # will change in code: torch.cuda.device_count()
-sync_bn: true
+sync_bn: false
+accumulate_grad_batches: 1
 batch_size: 2
 epochs: 50
 

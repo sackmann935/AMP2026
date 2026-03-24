@@ -37,8 +37,15 @@ fi
 #   PROFILE=gauss_s06_r1_cmxlite_long
 #   PROFILE=naive_smoke
 #   PROFILE=topk_chunked_smoke
-#   PROFILE=gaussian_topk_chunked_e6_s06
-PROFILE=${PROFILE:-gaussian_topk_chunked_e20_s06_regularized_cosine}
+#   PROFILE=gaussian_topk_chunked_e20_s06_regularized_cosine
+#
+# Ablation profiles for memory/generalization fixes:
+#   PROFILE=ablate_accum2
+#   PROFILE=ablate_bnfreeze_e3
+#   PROFILE=ablate_groupnorm_g16
+#   PROFILE=ablate_groupnorm_g16_accum2
+#   PROFILE=ablate_bnfreeze_e1_accum2
+PROFILE=${PROFILE:-ablate_accum2_no_cosine}
 
 case "$PROFILE" in
   baseline)
@@ -115,6 +122,75 @@ case "$PROFILE" in
       model.fusion.enabled=true model.fusion.type=cmx_lite
       model.camera.lift_mode=topk_chunked)
     ;;
+
+  # Fix 1: gradient accumulation only (effective larger batch)
+  ablate_accum2_no_cosine)
+    CMD=(python -u src/tools/train.py
+      exp_id=ablate_accum2_no_cosine
+      epochs=20 batch_size=2 num_workers=2
+      accumulate_grad_batches=2
+      model.middle_encoder.type=gaussian_soft
+      model.fusion.enabled=true model.fusion.type=cmx_lite
+      model.camera.lift_mode=topk_chunked
+      model.optimizer.scheduler.enabled=false)
+    ;;
+
+  # Fix 2: freeze BatchNorm stats from epoch 1
+  ablate_bnfreeze_e3)
+    CMD=(python -u src/tools/train.py
+      exp_id=ablate_bnfreeze_e_no_cosine
+      epochs=20 batch_size=2 num_workers=2
+      model.middle_encoder.type=gaussian_soft
+      model.fusion.enabled=true model.fusion.type=cmx_lite
+      model.camera.lift_mode=topk_chunked
+      model.regularization.norm_mode=batchnorm
+      model.regularization.freeze_bn.enabled=true
+      model.regularization.freeze_bn.freeze_epoch=3
+      model.regularization.freeze_bn.freeze_affine=false
+      model.optimizer.scheduler.enabled=false)
+    ;;
+
+  # Fix 3: replace BatchNorm with GroupNorm
+  ablate_groupnorm_g16)
+    CMD=(python -u src/tools/train.py
+      exp_id=ablate_groupnorm_g16
+      epochs=20 batch_size=2 num_workers=2
+      model.middle_encoder.type=gaussian_soft
+      model.fusion.enabled=true model.fusion.type=cmx_lite
+      model.camera.lift_mode=topk_chunked
+      model.regularization.norm_mode=groupnorm
+      model.regularization.group_norm_groups=16
+      model.optimizer.scheduler.enabled=false)
+    ;;
+
+  # Combination: GroupNorm + gradient accumulation
+  ablate_groupnorm_g16_accum2)
+    CMD=(python -u src/tools/train.py
+      exp_id=ablate_groupnorm_g16_accum2
+      epochs=20 batch_size=2 num_workers=2
+      accumulate_grad_batches=2
+      model.middle_encoder.type=gaussian_soft
+      model.fusion.enabled=true model.fusion.type=cmx_lite
+      model.camera.lift_mode=topk_chunked
+      model.regularization.norm_mode=groupnorm
+      model.regularization.group_norm_groups=16)
+    ;;
+
+  # Combination: BN freeze + gradient accumulation
+  ablate_bnfreeze_e1_accum2)
+    CMD=(python -u src/tools/train.py
+      exp_id=ablate_bnfreeze_e1_accum2
+      epochs=20 batch_size=2 num_workers=2
+      accumulate_grad_batches=2
+      model.middle_encoder.type=gaussian_soft
+      model.fusion.enabled=true model.fusion.type=cmx_lite
+      model.camera.lift_mode=topk_chunked
+      model.regularization.norm_mode=batchnorm
+      model.regularization.freeze_bn.enabled=true
+      model.regularization.freeze_bn.freeze_epoch=1
+      model.regularization.freeze_bn.freeze_affine=false)
+    ;;
+
   *)
     echo "Unknown PROFILE=$PROFILE"
     exit 2

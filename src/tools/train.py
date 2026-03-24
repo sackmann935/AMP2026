@@ -33,6 +33,7 @@ def train(cfg: DictConfig)-> None:
                                   shuffle=True,
                                   collate_fn=collate_vod_batch)
     val_num_workers = int(OmegaConf.select(cfg, 'val_num_workers', default=0))
+    accumulate_grad_batches = int(OmegaConf.select(cfg, 'accumulate_grad_batches', default=1))
     val_dataloader = DataLoader(val_dataset, 
                                 batch_size=1, 
                                 num_workers=val_num_workers,
@@ -71,6 +72,7 @@ def train(cfg: DictConfig)-> None:
         callbacks=callbacks,
         max_epochs=cfg.epochs,
         sync_batchnorm=cfg.sync_bn,
+        accumulate_grad_batches=accumulate_grad_batches,
         enable_model_summary= True,
     )
     

@@ -113,6 +113,14 @@ head:
     nms_thr: 0.2
 
 
+regularization:
+  norm_mode: batchnorm # [batchnorm, groupnorm]
+  group_norm_groups: 16
+  freeze_bn:
+    enabled: FALSE
+    freeze_epoch: 0
+    freeze_affine: FALSE
+
 # optimizer==>ADAMW
 optimizer:
   lr: 0.001

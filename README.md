@@ -7,6 +7,7 @@ Constraints from the assignment:
 - Improve over the provided radar-based CenterPoint baseline.
 - Use only radar and camera as perception inputs (no LiDAR input to the model).
 - Evaluate on KITTI-style 3D metrics (Car, Pedestrian, Cyclist) and report mAP improvements.
+- Stay within limited resources (single GPU, strict VRAM/CPU RAM caps).
 
 ## Current Solution
 The current codebase is a CenterPoint-style detector with radar backbone plus optional camera fusion.
@@ -30,7 +31,7 @@ Implemented components:
 
 ## Current Experiment Profile
 Main cluster profile in `src/tools/slurm_train.sh`:
-- `PROFILE=gaussian_topk_chunked_e20_s06_regularized`
+- `PROFILE=gaussian_topk_chunked_e20_s06_regularized_cosine`
 
 This profile currently uses:
 - `model.middle_encoder.type=gaussian_soft`
@@ -39,16 +40,27 @@ This profile currently uses:
 - `model.camera.lift_mode=topk_chunked`
 - `epochs=20`, `batch_size=2`
 
-## Current Regularization
+## Regularization And Memory-Constrained Training Switches
 Current regularization implemented in code/config:
 - Optimizer: `AdamW` with non-zero `weight_decay` (`src/config/model/centerpoint_radar.yaml`).
-- LR schedule: linear warmup + cosine decay (implemented in `src/model/detector/centerpoint.py`, configured under `optimizer.scheduler`).
-- Checkpoint regularization-by-selection: top-k model checkpoints are tracked by `validation/entire_area/mAP`.
+- LR schedule: linear warmup + cosine decay (`src/model/detector/centerpoint.py`, configured under `optimizer.scheduler`).
+- Checkpoint regularization-by-selection: top-k checkpoints tracked by `validation/entire_area/mAP`.
 
-Current gaps (not yet implemented):
-- No explicit dropout/drop-path in camera/fusion/head blocks.
-- No data augmentation pipeline in `src/dataset/view_of_delft.py`.
-- No early stopping callback yet.
+New ablation switches (all optional and independently toggleable):
+- `sync_bn=false` by default in single-GPU training (`src/config/train.yaml`).
+- `accumulate_grad_batches` to emulate larger effective batch sizes without higher VRAM (`src/config/train.yaml`, `src/tools/train.py`).
+- `model.regularization.norm_mode`:
+  - `batchnorm` (default)
+  - `groupnorm` (replaces BatchNorm layers at model init)
+- `model.regularization.freeze_bn`:
+  - `enabled`
+  - `freeze_epoch`
+  - `freeze_affine`
+
+Defaults preserve the current behavior unless explicitly overridden:
+- `norm_mode=batchnorm`
+- `freeze_bn.enabled=false`
+- `accumulate_grad_batches=1`
 
 ## Project Layout
 - `src/tools/train.py` - training entrypoint
@@ -82,7 +94,7 @@ python -u src/tools/train.py
 
 # train with overrides (example: current multimodal setup)
 python -u src/tools/train.py \
-  exp_id=gaussian_topk_chunked_regularized \
+  exp_id=gaussian_topk_chunked_regularized_cosine \
   epochs=20 batch_size=2 num_workers=2 \
   model.middle_encoder.type=gaussian_soft \
   model.fusion.enabled=true model.fusion.type=cmx_lite \
@@ -95,23 +107,56 @@ python src/tools/eval.py checkpoint_path=/path/to/checkpoint.ckpt
 python src/tools/test.py checkpoint_path=/path/to/checkpoint.ckpt
 ```
 
+Ablation examples for the new switches:
+
+```bash
+# 1) Only gradient accumulation
+python -u src/tools/train.py accumulate_grad_batches=2
+
+# 2) Only BN freeze (keep BatchNorm)
+python -u src/tools/train.py \
+  model.regularization.freeze_bn.enabled=true \
+  model.regularization.freeze_bn.freeze_epoch=1
+
+# 3) Only GroupNorm switch
+python -u src/tools/train.py \
+  model.regularization.norm_mode=groupnorm \
+  model.regularization.group_norm_groups=16
+
+# 4) Combine GroupNorm + accumulation
+python -u src/tools/train.py \
+  model.regularization.norm_mode=groupnorm \
+  accumulate_grad_batches=2
+```
+
 For cluster runs, use:
 
 ```bash
-PROFILE=gaussian_topk_chunked_e20_s06_regularized bash src/tools/slurm_train.sh
+PROFILE=gaussian_topk_chunked_e20_s06_regularized_cosine bash src/tools/slurm_train.sh
 ```
 
 ## Current TODOs
-Primary TODO: **improve generalization after adding scheduler regularization**.
+Primary TODO: **improve generalization under strict memory constraints**.
 
 Planned next steps:
-- Keep warmup+cosine scheduler and tune its hyperparameters (`warmup_epochs`, `min_lr_ratio`) together with `lr` and `weight_decay`.
-- Add explicit model regularization (dropout/drop-path candidates in camera encoder, fusion blocks, and head).
+- Tune warmup+cosine scheduler hyperparameters (`warmup_epochs`, `min_lr_ratio`) together with `lr` and `weight_decay`.
+- Run clean ablations for:
+  - BN freeze only
+  - GroupNorm only
+  - gradient accumulation only
+  - combinations of the above
 - Add stronger data augmentation/perturbation for radar and camera branches.
-- Add early-stopping based on `validation/entire_area/mAP` to stop after the peak epoch.
+- Add early stopping based on `validation/entire_area/mAP` to stop after the peak epoch.
 - Track and compare: training loss vs validation loss, per-class validation AP, ROI mAP vs entire-area mAP.
+
+Optional TODOs (not implemented yet):
+- Add mixed precision mode toggle (`bf16-mixed` or `16-mixed`) in trainer config.
+- Add optional dropout/drop-path blocks in camera/fusion/head modules.
+- Add configurable BN freeze policy by global step (not only epoch).
+- Add optional EMA of model weights for validation/evaluation.
+- Add automatic best-checkpoint evaluation script to avoid accidental `last.ckpt` reporting.
 
 ## Short Status
 - Baseline training/eval/test scripts are in place and working.
 - Multimodal Gaussian + CMX-lite path is implemented.
-- Next milestone is robust regularization and ablation to improve generalization.
+- Norm/BN/accumulation toggles are now available for memory-constrained ablations.

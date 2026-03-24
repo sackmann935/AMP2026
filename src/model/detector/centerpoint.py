@@ -6,6 +6,7 @@ from datetime import datetime
 
 import numpy as np 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from collections import OrderedDict
 
@@ -26,6 +27,14 @@ from src.model.heads import CenterHead
 from src.model.camera import ImageBEVGaussianEncoder
 from src.model.fusion import BEVFeatureFusion, CMXLiteFuser
 
+
+def _largest_divisor_at_most(value, upper):
+    divisor = max(1, min(int(upper), int(value)))
+    while value % divisor != 0 and divisor > 1:
+        divisor -= 1
+    return divisor
+
+
 class CenterPoint(L.LightningModule):
     def __init__(self, config):
         super().__init__()
@@ -45,6 +54,16 @@ class CenterPoint(L.LightningModule):
         backbone_config = config.get('backbone', None)
         neck_config = config.get('neck', None)
         head_config = config.get('head', None)
+
+        regularization_cfg = config.get('regularization', {})
+        regularization_cfg = dict(regularization_cfg or {})
+        freeze_bn_cfg = dict(regularization_cfg.get('freeze_bn', {}) or {})
+        self.norm_mode = str(regularization_cfg.get('norm_mode', 'batchnorm')).lower()
+        self.group_norm_groups = int(regularization_cfg.get('group_norm_groups', 16))
+        self.freeze_bn_enabled = bool(freeze_bn_cfg.get('enabled', False))
+        self.freeze_bn_epoch = int(freeze_bn_cfg.get('freeze_epoch', 0))
+        self.freeze_bn_affine = bool(freeze_bn_cfg.get('freeze_affine', False))
+        self._bn_freeze_notice_printed = False
         
         self.voxel_layer = Voxelization(**voxel_layer_config)
         self.voxel_encoder = PillarFeatureNet(**voxel_encoder_config)
@@ -93,7 +112,16 @@ class CenterPoint(L.LightningModule):
         self.backbone = SECOND(**backbone_config)
         self.neck = SECONDFPN(**neck_config)
         self.head = CenterHead(**head_config)
-        
+
+        if self.norm_mode == 'groupnorm':
+            replaced = self._convert_batchnorm_to_groupnorm()
+            print(f"[regularization] Converted {replaced} BatchNorm layers to GroupNorm.")
+        elif self.norm_mode != 'batchnorm':
+            raise ValueError(f"Unsupported regularization.norm_mode '{self.norm_mode}'; use 'batchnorm' or 'groupnorm'.")
+
+        if self.freeze_bn_enabled and self.norm_mode == 'groupnorm':
+            print("[regularization] freeze_bn.enabled=true has no effect with norm_mode=groupnorm.")
+
         self.optimizer_config = config.get('optimizer', None)
         
         self.vod_kitti_locations = KittiLocations(root_dir = self.data_root, 
@@ -117,7 +145,61 @@ class CenterPoint(L.LightningModule):
                      float(value),
                      batch_size=1,
                      sync_dist=(stage == 'validation'))
-        
+
+    def _convert_batchnorm_to_groupnorm(self):
+        bn_types = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)
+
+        def _convert(module):
+            replaced = 0
+            for name, child in list(module.named_children()):
+                if isinstance(child, bn_types):
+                    groups = _largest_divisor_at_most(child.num_features, self.group_norm_groups)
+                    gn = nn.GroupNorm(
+                        num_groups=groups,
+                        num_channels=child.num_features,
+                        eps=child.eps,
+                        affine=child.affine)
+                    if child.affine:
+                        with torch.no_grad():
+                            gn.weight.copy_(child.weight.detach())
+                            gn.bias.copy_(child.bias.detach())
+                    setattr(module, name, gn)
+                    replaced += 1
+                else:
+                    replaced += _convert(child)
+            return replaced
+
+        return _convert(self)
+
+    def _freeze_batchnorm_layers(self):
+        bn_types = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)
+        for module in self.modules():
+            if isinstance(module, bn_types):
+                module.eval()
+                if self.freeze_bn_affine:
+                    if module.weight is not None:
+                        module.weight.requires_grad = False
+                    if module.bias is not None:
+                        module.bias.requires_grad = False
+
+    def _apply_batchnorm_freeze_if_needed(self):
+        if not self.freeze_bn_enabled:
+            return
+        if self.current_epoch < self.freeze_bn_epoch:
+            return
+        self._freeze_batchnorm_layers()
+        if not self._bn_freeze_notice_printed:
+            print(
+                f"[regularization] BatchNorm freeze active from epoch {self.freeze_bn_epoch} "
+                f"(current_epoch={self.current_epoch}, freeze_affine={self.freeze_bn_affine}).")
+            self._bn_freeze_notice_printed = True
+
+    def on_train_start(self):
+        self._apply_batchnorm_freeze_if_needed()
+
+    def on_train_epoch_start(self):
+        self._apply_batchnorm_freeze_if_needed()
+
     ## Voxelization
     def voxelize(self, points):
         voxel_dict = dict()
