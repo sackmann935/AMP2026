@@ -27,28 +27,32 @@ Implemented components:
 - Training stack:
   - Hydra configs + PyTorch Lightning training loop.
   - AdamW optimizer with step-wise linear warmup + cosine decay scheduler.
-  - Validation logging and checkpointing based on `validation/entire_area/mAP`.
+  - Validation logging and configurable checkpoint monitor (default: `validation/ROI/mAP`).
 
 ## Current Experiment Profile
 Main cluster profile in `src/tools/slurm_train.sh`:
-- `PROFILE=gaussian_topk_chunked_e20_s06_regularized_cosine`
+- `PROFILE=ped_bnfreeze_no_cosine`
 
 This profile currently uses:
 - `model.middle_encoder.type=gaussian_soft`
 - `model.fusion.enabled=true`
 - `model.fusion.type=cmx_lite`
 - `model.camera.lift_mode=topk_chunked`
+- `model.regularization.freeze_bn.enabled=true`
+- `model.optimizer.scheduler.enabled=false`
 - `epochs=20`, `batch_size=2`
 
 ## Regularization And Memory-Constrained Training Switches
 Current regularization implemented in code/config:
 - Optimizer: `AdamW` with non-zero `weight_decay` (`src/config/model/centerpoint_radar.yaml`).
 - LR schedule: linear warmup + cosine decay (`src/model/detector/centerpoint.py`, configured under `optimizer.scheduler`).
-- Checkpoint regularization-by-selection: top-k checkpoints tracked by `validation/entire_area/mAP`.
+- Checkpoint selection: top-k checkpoints tracked by configurable monitor (default `validation/ROI/mAP`).
 
 New ablation switches (all optional and independently toggleable):
 - `sync_bn=false` by default in single-GPU training (`src/config/train.yaml`).
 - `accumulate_grad_batches` to emulate larger effective batch sizes without higher VRAM (`src/config/train.yaml`, `src/tools/train.py`).
+- `checkpoint_monitor` / `checkpoint_mode` to select checkpoints by the target metric (default monitor is ROI mAP).
+- `eval_score_threshold` to override evaluation-time score filtering without deep Hydra path overrides.
 - `model.regularization.norm_mode`:
   - `batchnorm` (default)
   - `groupnorm` (replaces BatchNorm layers at model init)
@@ -61,6 +65,10 @@ Defaults preserve the current behavior unless explicitly overridden:
 - `norm_mode=batchnorm`
 - `freeze_bn.enabled=false`
 - `accumulate_grad_batches=1`
+- `checkpoint_monitor=validation/ROI/mAP`
+
+Data handling fix applied:
+- Empty-label frames no longer inject fake Car ground-truth boxes; they now keep empty GT tensors in `src/dataset/view_of_delft.py`.
 
 ## Project Layout
 - `src/tools/train.py` - training entrypoint
@@ -127,12 +135,25 @@ python -u src/tools/train.py \
 python -u src/tools/train.py \
   model.regularization.norm_mode=groupnorm \
   accumulate_grad_batches=2
+
+# 5) ROI-oriented checkpointing + lower eval threshold
+python -u src/tools/train.py \
+  checkpoint_monitor=validation/ROI/mAP \
+  eval_score_threshold=0.03
+
+# 6) Ped-focused target sharpening
+python -u src/tools/train.py \
+  model.head.train_cfg.min_radius=1 \
+  eval_score_threshold=0.03
 ```
 
 For cluster runs, use:
 
 ```bash
-PROFILE=gaussian_topk_chunked_e20_s06_regularized_cosine bash src/tools/slurm_train.sh
+PROFILE=ped_bnfreeze_no_cosine bash src/tools/slurm_train.sh
+PROFILE=ped_bnfreeze_no_cosine_thr003 bash src/tools/slurm_train.sh
+PROFILE=ped_bnfreeze_no_cosine_minr1_thr003 bash src/tools/slurm_train.sh
+PROFILE=ped_accum2_no_cosine_minr1_thr003 bash src/tools/slurm_train.sh
 ```
 
 ## Current TODOs
@@ -146,7 +167,7 @@ Planned next steps:
   - gradient accumulation only
   - combinations of the above
 - Add stronger data augmentation/perturbation for radar and camera branches.
-- Add early stopping based on `validation/entire_area/mAP` to stop after the peak epoch.
+- Add early stopping based on `validation/ROI/mAP` to stop after the peak epoch.
 - Track and compare: training loss vs validation loss, per-class validation AP, ROI mAP vs entire-area mAP.
 
 Optional TODOs (not implemented yet):

@@ -10,6 +10,9 @@ data_root: data/view_of_delft
 output_dir: outputs/${exp_id}
 
 checkpoint_path:
+checkpoint_monitor: validation/ROI/mAP
+checkpoint_mode: max
+eval_score_threshold:
 
 class_namses: ['Car', 'Pedestrian', 'Cyclist']
 # trainer:
@@ -25,5 +28,4 @@ epochs: 50
 log_every: 50
 val_every: 2
 save_top_model: 5
-
 

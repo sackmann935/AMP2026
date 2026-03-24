@@ -93,8 +93,8 @@ class ViewOfDelft(Dataset):
         radar_data = torch.tensor(radar_data)
         
         if gt_bboxes_3d_list == []:
-            gt_labels_3d = np.array([0])
-            gt_bboxes_3d = np.zeros((1,7))
+            gt_labels_3d = np.zeros((0,), dtype=np.int64)
+            gt_bboxes_3d = np.zeros((0, 7), dtype=np.float32)
         else:
             gt_labels_3d = np.array(gt_labels_3d_list, dtype=np.int64)
             gt_bboxes_3d = np.stack(gt_bboxes_3d_list, axis=0)

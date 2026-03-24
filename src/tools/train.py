@@ -23,6 +23,11 @@ def train(cfg: DictConfig)-> None:
     L.seed_everything(cfg.seed, workers=True)
 
     fusion_enabled = bool(OmegaConf.select(cfg, 'model.fusion.enabled', default=False))
+    checkpoint_monitor = str(OmegaConf.select(cfg, 'checkpoint_monitor', default='validation/ROI/mAP'))
+    checkpoint_mode = str(OmegaConf.select(cfg, 'checkpoint_mode', default='max'))
+    eval_score_threshold = OmegaConf.select(cfg, 'eval_score_threshold', default=None)
+    if eval_score_threshold is not None:
+        cfg.model.head.test_cfg.score_threshold = float(eval_score_threshold)
     
     train_dataset = ViewOfDelft(data_root=cfg.data_root, split='train', include_camera=fusion_enabled)
     val_dataset = ViewOfDelft(data_root=cfg.data_root, split='val', include_camera=fusion_enabled)
@@ -45,8 +50,8 @@ def train(cfg: DictConfig)-> None:
             dirpath=osp.join(cfg.output_dir, "checkpoints"),
             filename='ep{epoch}-'+cfg.exp_id,
             save_last=True,
-            monitor='validation/entire_area/mAP',
-            mode='max',
+            monitor=checkpoint_monitor,
+            mode=checkpoint_mode,
             auto_insert_metric_name=False,
             save_top_k=cfg.save_top_model,
         ),

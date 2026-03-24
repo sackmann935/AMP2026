@@ -45,7 +45,16 @@ fi
 #   PROFILE=ablate_groupnorm_g16
 #   PROFILE=ablate_groupnorm_g16_accum2
 #   PROFILE=ablate_bnfreeze_e1_accum2
-PROFILE=${PROFILE:-ablate_accum2_no_cosine}
+#
+# Ped-focused ROI profiles (recommended for today's runs):
+#   PROFILE=ped_bnfreeze_no_cosine
+#   PROFILE=ped_bnfreeze_no_cosine_thr003
+#   PROFILE=ped_bnfreeze_no_cosine_thr001
+#   PROFILE=ped_bnfreeze_no_cosine_minr1
+#   PROFILE=ped_bnfreeze_no_cosine_minr1_thr003
+#   PROFILE=ped_bnfreeze_no_cosine_minr1_thr003_nmsped02
+#   PROFILE=ped_accum2_no_cosine_minr1_thr003
+PROFILE=${PROFILE:-ped_accum2_no_cosine_minr1_thr003}
 
 case "$PROFILE" in
   baseline)
@@ -124,6 +133,16 @@ case "$PROFILE" in
     ;;
 
   # Fix 1: gradient accumulation only (effective larger batch)
+  ablate_accum2)
+    CMD=(python -u src/tools/train.py
+      exp_id=ablate_accum2
+      epochs=20 batch_size=2 num_workers=2
+      accumulate_grad_batches=2
+      model.middle_encoder.type=gaussian_soft
+      model.fusion.enabled=true model.fusion.type=cmx_lite
+      model.camera.lift_mode=topk_chunked)
+    ;;
+
   ablate_accum2_no_cosine)
     CMD=(python -u src/tools/train.py
       exp_id=ablate_accum2_no_cosine
@@ -137,6 +156,19 @@ case "$PROFILE" in
 
   # Fix 2: freeze BatchNorm stats from epoch 1
   ablate_bnfreeze_e3)
+    CMD=(python -u src/tools/train.py
+      exp_id=ablate_bnfreeze_e3
+      epochs=20 batch_size=2 num_workers=2
+      model.middle_encoder.type=gaussian_soft
+      model.fusion.enabled=true model.fusion.type=cmx_lite
+      model.camera.lift_mode=topk_chunked
+      model.regularization.norm_mode=batchnorm
+      model.regularization.freeze_bn.enabled=true
+      model.regularization.freeze_bn.freeze_epoch=3
+      model.regularization.freeze_bn.freeze_affine=false)
+    ;;
+
+  ablate_bnfreeze_e_no_cosine)
     CMD=(python -u src/tools/train.py
       exp_id=ablate_bnfreeze_e_no_cosine
       epochs=20 batch_size=2 num_workers=2
@@ -189,6 +221,127 @@ case "$PROFILE" in
       model.regularization.freeze_bn.enabled=true
       model.regularization.freeze_bn.freeze_epoch=1
       model.regularization.freeze_bn.freeze_affine=false)
+    ;;
+
+  # Ped-focused base: best stable setting from recent runs.
+  ped_bnfreeze_no_cosine)
+    CMD=(python -u src/tools/train.py
+      exp_id=ped_bnfreeze_no_cosine
+      epochs=20 batch_size=2 num_workers=2
+      checkpoint_monitor=validation/ROI/mAP checkpoint_mode=max
+      model.middle_encoder.type=gaussian_soft
+      model.fusion.enabled=true model.fusion.type=cmx_lite
+      model.camera.lift_mode=topk_chunked
+      model.regularization.norm_mode=batchnorm
+      model.regularization.freeze_bn.enabled=true
+      model.regularization.freeze_bn.freeze_epoch=3
+      model.regularization.freeze_bn.freeze_affine=false
+      model.optimizer.scheduler.enabled=false)
+    ;;
+
+  # Lower ROI eval threshold to recover low-confidence Ped/Cyclist detections.
+  ped_bnfreeze_no_cosine_thr003)
+    CMD=(python -u src/tools/train.py
+      exp_id=ped_bnfreeze_no_cosine_thr003
+      epochs=20 batch_size=2 num_workers=2
+      checkpoint_monitor=validation/ROI/mAP checkpoint_mode=max
+      eval_score_threshold=0.03
+      model.middle_encoder.type=gaussian_soft
+      model.fusion.enabled=true model.fusion.type=cmx_lite
+      model.camera.lift_mode=topk_chunked
+      model.regularization.norm_mode=batchnorm
+      model.regularization.freeze_bn.enabled=true
+      model.regularization.freeze_bn.freeze_epoch=3
+      model.regularization.freeze_bn.freeze_affine=false
+      model.optimizer.scheduler.enabled=false)
+    ;;
+
+  ped_bnfreeze_no_cosine_thr001)
+    CMD=(python -u src/tools/train.py
+      exp_id=ped_bnfreeze_no_cosine_thr001
+      epochs=20 batch_size=2 num_workers=2
+      checkpoint_monitor=validation/ROI/mAP checkpoint_mode=max
+      eval_score_threshold=0.01
+      model.middle_encoder.type=gaussian_soft
+      model.fusion.enabled=true model.fusion.type=cmx_lite
+      model.camera.lift_mode=topk_chunked
+      model.regularization.norm_mode=batchnorm
+      model.regularization.freeze_bn.enabled=true
+      model.regularization.freeze_bn.freeze_epoch=3
+      model.regularization.freeze_bn.freeze_affine=false
+      model.optimizer.scheduler.enabled=false)
+    ;;
+
+  # Sharper heatmap targets for small objects.
+  ped_bnfreeze_no_cosine_minr1)
+    CMD=(python -u src/tools/train.py
+      exp_id=ped_bnfreeze_no_cosine_minr1
+      epochs=20 batch_size=2 num_workers=2
+      checkpoint_monitor=validation/ROI/mAP checkpoint_mode=max
+      model.head.train_cfg.min_radius=1
+      model.middle_encoder.type=gaussian_soft
+      model.fusion.enabled=true model.fusion.type=cmx_lite
+      model.camera.lift_mode=topk_chunked
+      model.regularization.norm_mode=batchnorm
+      model.regularization.freeze_bn.enabled=true
+      model.regularization.freeze_bn.freeze_epoch=3
+      model.regularization.freeze_bn.freeze_affine=false
+      model.optimizer.scheduler.enabled=false)
+    ;;
+
+  ped_bnfreeze_no_cosine_minr1_thr003)
+    CMD=(python -u src/tools/train.py
+      exp_id=ped_bnfreeze_no_cosine_minr1_thr003
+      epochs=20 batch_size=2 num_workers=2
+      checkpoint_monitor=validation/ROI/mAP checkpoint_mode=max
+      eval_score_threshold=0.03
+      model.head.train_cfg.min_radius=1
+      model.middle_encoder.type=gaussian_soft
+      model.fusion.enabled=true model.fusion.type=cmx_lite
+      model.camera.lift_mode=topk_chunked
+      model.regularization.norm_mode=batchnorm
+      model.regularization.freeze_bn.enabled=true
+      model.regularization.freeze_bn.freeze_epoch=3
+      model.regularization.freeze_bn.freeze_affine=false
+      model.optimizer.scheduler.enabled=false)
+    ;;
+
+  # Less aggressive Ped circle-NMS suppression.
+  ped_bnfreeze_no_cosine_minr1_thr003_nmsped02)
+    CMD=(python -u src/tools/train.py
+      exp_id=ped_bnfreeze_no_cosine_minr1_thr003_nmsped02
+      epochs=20 batch_size=2 num_workers=2
+      checkpoint_monitor=validation/ROI/mAP checkpoint_mode=max
+      eval_score_threshold=0.03
+      model.head.train_cfg.min_radius=1
+      model.head.test_cfg.min_radius=[4,0.2,0.85]
+      model.middle_encoder.type=gaussian_soft
+      model.fusion.enabled=true model.fusion.type=cmx_lite
+      model.camera.lift_mode=topk_chunked
+      model.regularization.norm_mode=batchnorm
+      model.regularization.freeze_bn.enabled=true
+      model.regularization.freeze_bn.freeze_epoch=3
+      model.regularization.freeze_bn.freeze_affine=false
+      model.optimizer.scheduler.enabled=false)
+    ;;
+
+  # Ped-focused combo with larger effective batch.
+  ped_accum2_no_cosine_minr1_thr003)
+    CMD=(python -u src/tools/train.py
+      exp_id=ped_accum2_no_cosine_minr1_thr003
+      epochs=20 batch_size=2 num_workers=2
+      accumulate_grad_batches=2
+      checkpoint_monitor=validation/ROI/mAP checkpoint_mode=max
+      eval_score_threshold=0.03
+      model.head.train_cfg.min_radius=1
+      model.middle_encoder.type=gaussian_soft
+      model.fusion.enabled=true model.fusion.type=cmx_lite
+      model.camera.lift_mode=topk_chunked
+      model.regularization.norm_mode=batchnorm
+      model.regularization.freeze_bn.enabled=true
+      model.regularization.freeze_bn.freeze_epoch=3
+      model.regularization.freeze_bn.freeze_affine=false
+      model.optimizer.scheduler.enabled=false)
     ;;
 
   *)
