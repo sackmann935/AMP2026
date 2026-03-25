@@ -1,183 +1,124 @@
 # Advanced Machine Perception Final Assignment
 
-## Task
-This project targets the **AMP final assignment**: improve a baseline 3D detector on the **View of Delft** dataset using **radar and/or monocular camera** inputs.
+## Goal
+Improve CenterPoint-style 3D detection on View of Delft under strict resource limits (single 10GB MIG GPU, low CPU RAM), targeting higher ROI mAP for `Car`, `Pedestrian`, and `Cyclist`.
 
-Constraints from the assignment:
-- Improve over the provided radar-based CenterPoint baseline.
-- Use only radar and camera as perception inputs (no LiDAR input to the model).
-- Evaluate on KITTI-style 3D metrics (Car, Pedestrian, Cyclist) and report mAP improvements.
-- Stay within limited resources (single GPU, strict VRAM/CPU RAM caps).
+## Current Implementation
 
-## Current Solution
-The current codebase is a CenterPoint-style detector with radar backbone plus optional camera fusion.
+### Radar branch
+- Hard voxelization (`src/ops/voxelize.py`) + PillarFeatureNet (`src/model/voxel_encoders/pillar_encoder.py`).
+- Middle encoder options:
+  - `hard` scatter
+  - `gaussian_soft` scatter (`src/model/middle_encoders/gaussian_soft_scatter.py`)
+- Radar input source switch:
+  - `radar` (single scan)
+  - `radar_3frames`
+  - `radar_5frames`
 
-Implemented components:
-- Radar pipeline:
-  - Voxelization + pillar feature encoder.
-  - Two middle encoders: `hard` scatter and custom `gaussian_soft` scatter.
-- Camera BEV pipeline:
-  - `ImageBEVGaussianEncoder` lifts monocular image features to BEV.
-  - Lift modes: `expected`, `naive_dense`, `topk_chunked`.
-- Fusion options:
-  - `none`, `add`, `concat_1x1`, `gated`.
-  - `cmx_lite` for multi-scale cross-modal fusion (radar + camera backbone features).
-- Detector head:
-  - CenterPoint head for 3 classes (`Car`, `Pedestrian`, `Cyclist`).
-- Training stack:
-  - Hydra configs + PyTorch Lightning training loop.
-  - AdamW optimizer with step-wise linear warmup + cosine decay scheduler.
-  - Validation logging and configurable checkpoint monitor (default: `validation/ROI/mAP`).
+### Temporal radar handling (new)
+Implemented to make multi-frame aggregation effective:
+- **Recency-first point ordering** for temporal radar sources in dataset loader (`src/dataset/view_of_delft.py`):
+  - For `radar_3frames` / `radar_5frames`, points are sorted by sweep-id descending (newest first).
+  - This prevents old sweeps from dominating voxel slots.
+- **Higher voxel point cap for temporal runs** in training (`src/tools/train.py`):
+  - If `radar_source != radar`, `model.pts_voxel_layer.max_num_points` is set from `temporal_max_num_points` (default `10`).
+  - Base model config still keeps `5` for single-scan baseline.
 
-## Current Experiment Profile
-Main cluster profile in `src/tools/slurm_train.sh`:
-- `PROFILE=ped_bnfreeze_no_cosine`
+### Camera + fusion branch
+- Camera BEV lift encoder (`src/model/camera/image_bev_gaussian.py`).
+- Lift mode options include `topk_chunked`.
+- Fusion options include `cmx_lite` (`src/model/fusion/cmx_lite.py`).
 
-This profile currently uses:
-- `model.middle_encoder.type=gaussian_soft`
-- `model.fusion.enabled=true`
-- `model.fusion.type=cmx_lite`
-- `model.camera.lift_mode=topk_chunked`
-- `model.regularization.freeze_bn.enabled=true`
-- `model.optimizer.scheduler.enabled=false`
-- `epochs=20`, `batch_size=2`
+### Head / optimization
+- CenterPoint head with 3 tasks (Car/Pedestrian/Cyclist).
+- AdamW optimizer.
+- Optional cosine warmup scheduler.
+- Optional regularization toggles:
+  - `groupnorm`
+  - `freeze_bn`
+  - `accumulate_grad_batches`
+- Checkpoint monitor defaults to `validation/ROI/mAP`.
 
-## Regularization And Memory-Constrained Training Switches
-Current regularization implemented in code/config:
-- Optimizer: `AdamW` with non-zero `weight_decay` (`src/config/model/centerpoint_radar.yaml`).
-- LR schedule: linear warmup + cosine decay (`src/model/detector/centerpoint.py`, configured under `optimizer.scheduler`).
-- Checkpoint selection: top-k checkpoints tracked by configurable monitor (default `validation/ROI/mAP`).
+## Config Surface (important)
 
-New ablation switches (all optional and independently toggleable):
-- `sync_bn=false` by default in single-GPU training (`src/config/train.yaml`).
-- `accumulate_grad_batches` to emulate larger effective batch sizes without higher VRAM (`src/config/train.yaml`, `src/tools/train.py`).
-- `checkpoint_monitor` / `checkpoint_mode` to select checkpoints by the target metric (default monitor is ROI mAP).
-- `eval_score_threshold` to override evaluation-time score filtering without deep Hydra path overrides.
-- `model.regularization.norm_mode`:
-  - `batchnorm` (default)
-  - `groupnorm` (replaces BatchNorm layers at model init)
-- `model.regularization.freeze_bn`:
-  - `enabled`
-  - `freeze_epoch`
-  - `freeze_affine`
+### Train config (`src/config/train.yaml`)
+- `radar_source`: `radar | radar_3frames | radar_5frames`
+- `radar_prioritize_recent`: default `true`
+- `temporal_max_num_points`: default `10` (used for temporal radar sources)
+- `accumulate_grad_batches`, `sync_bn`, checkpoint/eval threshold options
 
-Defaults preserve the current behavior unless explicitly overridden:
-- `norm_mode=batchnorm`
-- `freeze_bn.enabled=false`
-- `accumulate_grad_batches=1`
-- `checkpoint_monitor=validation/ROI/mAP`
+### Eval/test configs
+- `src/config/eval.yaml` and `src/config/test.yaml` include:
+  - `radar_source`
+  - `radar_prioritize_recent`
 
-Data handling fix applied:
-- Empty-label frames no longer inject fake Car ground-truth boxes; they now keep empty GT tensors in `src/dataset/view_of_delft.py`.
+## SLURM Profiles
+Main launcher: `src/tools/slurm_train.sh`
 
-## Project Layout
-- `src/tools/train.py` - training entrypoint
-- `src/tools/eval.py` - validation from checkpoint
-- `src/tools/test.py` - test inference / prediction export
-- `src/tools/slurm_train.sh` - DelftBlue SLURM launcher with profiles
-- `src/tools/smoke_train.sh` - short GPU smoke test
-- `src/config/` - Hydra train/eval/test/model configs
-- `src/model/` - detector, middle encoders, camera lift, fusion modules
-- `src/dataset/` - View of Delft dataset loader and collate function
+Useful profiles:
+- Reference / ablation baselines:
+  - `ablate_accum2_no_cosine`
+  - `ablate_bnfreeze_e_no_cosine`
+  - `ablate_groupnorm_g16`
+  - `ped_accum2_no_cosine_minr1_thr003`
+- Temporal radar ablations (ped-best settings):
+  - `radar_single_pedbest`
+  - `radar_3f_pedbest`
+  - `radar_5f_pedbest`
+- Temporal radar ablations (groupnorm settings):
+  - `radar_single_gn`
+  - `radar_3f_gn`
+  - `radar_5f_gn`
 
-## Data and Environment
-Expected data location:
-- `data/view_of_delft`
-
-Expected environment:
-- `conda activate amp`
-
-Note:
-- Large artifacts are intentionally excluded from Git (`data/`, `outputs/`, caches, logs, checkpoints).
+For temporal profiles (`radar_3f_*`, `radar_5f_*`), SLURM now explicitly sets:
+- `radar_prioritize_recent=true`
+- `temporal_max_num_points=10`
 
 ## How To Run
-From repository root:
 
+### Local train
 ```bash
-# quick sanity check on GPU
-bash src/tools/smoke_train.sh
-
-# train (default Hydra train config)
-python -u src/tools/train.py
-
-# train with overrides (example: current multimodal setup)
 python -u src/tools/train.py \
-  exp_id=gaussian_topk_chunked_regularized_cosine \
+  exp_id=my_run \
   epochs=20 batch_size=2 num_workers=2 \
+  radar_source=radar_5frames \
   model.middle_encoder.type=gaussian_soft \
   model.fusion.enabled=true model.fusion.type=cmx_lite \
   model.camera.lift_mode=topk_chunked
-
-# evaluate validation split from checkpoint
-python src/tools/eval.py checkpoint_path=/path/to/checkpoint.ckpt
-
-# run test split inference for leaderboard export
-python src/tools/test.py checkpoint_path=/path/to/checkpoint.ckpt
 ```
 
-Ablation examples for the new switches:
-
+### SLURM
 ```bash
-# 1) Only gradient accumulation
-python -u src/tools/train.py accumulate_grad_batches=2
-
-# 2) Only BN freeze (keep BatchNorm)
-python -u src/tools/train.py \
-  model.regularization.freeze_bn.enabled=true \
-  model.regularization.freeze_bn.freeze_epoch=1
-
-# 3) Only GroupNorm switch
-python -u src/tools/train.py \
-  model.regularization.norm_mode=groupnorm \
-  model.regularization.group_norm_groups=16
-
-# 4) Combine GroupNorm + accumulation
-python -u src/tools/train.py \
-  model.regularization.norm_mode=groupnorm \
-  accumulate_grad_batches=2
-
-# 5) ROI-oriented checkpointing + lower eval threshold
-python -u src/tools/train.py \
-  checkpoint_monitor=validation/ROI/mAP \
-  eval_score_threshold=0.03
-
-# 6) Ped-focused target sharpening
-python -u src/tools/train.py \
-  model.head.train_cfg.min_radius=1 \
-  eval_score_threshold=0.03
+PROFILE=radar_5f_pedbest bash src/tools/slurm_train.sh
 ```
 
-For cluster runs, use:
-
+### Eval / test
 ```bash
-PROFILE=ped_bnfreeze_no_cosine bash src/tools/slurm_train.sh
-PROFILE=ped_bnfreeze_no_cosine_thr003 bash src/tools/slurm_train.sh
-PROFILE=ped_bnfreeze_no_cosine_minr1_thr003 bash src/tools/slurm_train.sh
-PROFILE=ped_accum2_no_cosine_minr1_thr003 bash src/tools/slurm_train.sh
+python src/tools/eval.py checkpoint_path=/path/to.ckpt radar_source=radar_5frames
+python src/tools/test.py checkpoint_path=/path/to.ckpt radar_source=radar_5frames
 ```
 
-## Current TODOs
-Primary TODO: **improve generalization under strict memory constraints**.
+## Current Known Issues / Risks
+- Some historical runs were interrupted by SLURM `SIGTERM`, so compare best checkpoints, not only final epoch lines.
+- W&B `output.log` in some runs can be truncated; prefer SLURM logs or full run artifacts when analyzing failures.
+- Camera image loading emits a non-writable array warning in older logs; dataset now defensively copies image arrays.
 
-Planned next steps:
-- Tune warmup+cosine scheduler hyperparameters (`warmup_epochs`, `min_lr_ratio`) together with `lr` and `weight_decay`.
-- Run clean ablations for:
-  - BN freeze only
-  - GroupNorm only
-  - gradient accumulation only
-  - combinations of the above
-- Add stronger data augmentation/perturbation for radar and camera branches.
-- Add early stopping based on `validation/ROI/mAP` to stop after the peak epoch.
-- Track and compare: training loss vs validation loss, per-class validation AP, ROI mAP vs entire-area mAP.
+## TODO (Prioritized)
+1. Run clean temporal A/B/C with fixed seed:
+   - `radar` vs `radar_3frames` vs `radar_5frames`
+   - keep all other hyperparameters identical.
+2. Add an ablation toggle for temporal point ordering:
+   - compare `radar_prioritize_recent=true` vs `false` on 5-frame.
+3. Sweep temporal voxel cap on 5-frame:
+   - `temporal_max_num_points`: `8`, `10`, `12`, `15`.
+4. Separate radar-only and radar+camera temporal tests:
+   - detect whether gains are lost inside fusion.
+5. Add temporal-aware point sampling (optional):
+   - reserve per-voxel quota for `t=0` before filling with older sweeps.
+6. Stabilize Cyclist class:
+   - evaluate class-aware thresholds or class-aware NMS post-processing.
 
-Optional TODOs (not implemented yet):
-- Add mixed precision mode toggle (`bf16-mixed` or `16-mixed`) in trainer config.
-- Add optional dropout/drop-path blocks in camera/fusion/head modules.
-- Add configurable BN freeze policy by global step (not only epoch).
-- Add optional EMA of model weights for validation/evaluation.
-- Add automatic best-checkpoint evaluation script to avoid accidental `last.ckpt` reporting.
-
-## Short Status
-- Baseline training/eval/test scripts are in place and working.
-- Multimodal Gaussian + CMX-lite path is implemented.
-- Norm/BN/accumulation toggles are now available for memory-constrained ablations.
+## Next Ideas
+- Add lightweight temporal feature channel engineering (e.g., normalized age embedding) before PFN.
+- Consider dynamic voxelization for temporal runs to reduce order-sensitive clipping effects.
+- Add automated summary script that reads all run logs and reports best ROI mAP + config deltas.

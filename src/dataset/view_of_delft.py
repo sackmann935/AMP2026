@@ -33,11 +33,27 @@ class ViewOfDelft(Dataset):
         'bbox3d_location': slice(11,14), # 3D object location x,y,z in camera coordinates (in meters).
         'bbox3d_rotation': 14, # Rotation around -Z-axis in LiDAR coordinates [-pi..pi].
     }
+
+    RADAR_SOURCE_ALIASES = {
+        'radar': 'radar',
+        'single': 'radar',
+        'single_scan': 'radar',
+        'radar_3frames': 'radar_3frames',
+        'radar_3_scans': 'radar_3frames',
+        '3frames': 'radar_3frames',
+        '3scans': 'radar_3frames',
+        'radar_5frames': 'radar_5frames',
+        'radar_5_scans': 'radar_5frames',
+        '5frames': 'radar_5frames',
+        '5scans': 'radar_5frames',
+    }
     
     def __init__(self, 
                  data_root = 'data/view_of_delft', 
                  sequential_loading=False,
                  split = 'train',
+                 radar_source='radar',
+                 radar_prioritize_recent=True,
                  include_camera=False,
                  image_mean=(0.485, 0.456, 0.406),
                  image_std=(0.229, 0.224, 0.225)):
@@ -56,8 +72,45 @@ class ViewOfDelft(Dataset):
             self.sample_list = [line.strip() for line in lines]
         
         self.vod_kitti_locations = KittiLocations(root_dir = data_root)
+        self.radar_source = self._normalize_radar_source(radar_source)
+        self.radar_prioritize_recent = bool(radar_prioritize_recent)
+        self._override_radar_dir()
+
     def __len__(self):
         return len(self.sample_list)
+
+    def _normalize_radar_source(self, radar_source):
+        key = str(radar_source).strip().lower()
+        if key not in self.RADAR_SOURCE_ALIASES:
+            supported = sorted(self.RADAR_SOURCE_ALIASES.keys())
+            raise ValueError(
+                f"Unsupported radar_source '{radar_source}'. Supported values: {supported}")
+        return self.RADAR_SOURCE_ALIASES[key]
+
+    def _override_radar_dir(self):
+        if self.radar_source == 'radar':
+            return
+
+        radar_candidates = {
+            'radar_3frames': [
+                os.path.join(self.data_root, 'radar_3frames', 'training', 'velodyne'),
+                os.path.join(self.data_root, 'radar_3_scans', 'training', 'velodyne'),
+            ],
+            'radar_5frames': [
+                os.path.join(self.data_root, 'radar_5frames', 'training', 'velodyne'),
+                os.path.join(self.data_root, 'radar_5_scans', 'training', 'velodyne'),
+            ],
+        }
+
+        for candidate in radar_candidates[self.radar_source]:
+            if os.path.isdir(candidate):
+                self.vod_kitti_locations.radar_dir = candidate
+                return
+
+        searched = radar_candidates[self.radar_source]
+        raise FileNotFoundError(
+            f"Could not find directory for radar_source='{self.radar_source}'. "
+            f"Searched: {searched}")
 
     def __getitem__(self, idx):
         num_frame = self.sample_list[idx]
@@ -66,6 +119,18 @@ class ViewOfDelft(Dataset):
         local_transforms = FrameTransformMatrix(vod_frame_data)
         
         radar_data = vod_frame_data.radar_data
+        if radar_data is None:
+            raise RuntimeError(
+                f"Radar data missing for frame '{num_frame}' using radar_source='{self.radar_source}'.")
+        radar_data = np.asarray(radar_data, dtype=np.float32)
+
+        # Temporal radar folders store sweep-id in the last feature column
+        # (e.g., -4 ... 0). Keep newest points first so hard voxelization
+        # retains recent measurements when max points per voxel is reached.
+        if self.radar_prioritize_recent and self.radar_source != 'radar':
+            if radar_data.ndim == 2 and radar_data.shape[1] >= 7 and radar_data.shape[0] > 1:
+                order = np.argsort(radar_data[:, 6], kind='stable')[::-1]
+                radar_data = radar_data[order]
 
         
         gt_labels_3d_list = []
@@ -90,7 +155,7 @@ class ViewOfDelft(Dataset):
                 
                     gt_bboxes_3d_list.append(np.concatenate([bbox3d_locs, bbox3d_dims, bbox3d_rot], axis=0))
 
-        radar_data = torch.tensor(radar_data)
+        radar_data = torch.from_numpy(np.ascontiguousarray(radar_data)).to(torch.float32)
         
         if gt_bboxes_3d_list == []:
             gt_labels_3d = np.zeros((0,), dtype=np.int64)
@@ -124,6 +189,7 @@ class ViewOfDelft(Dataset):
         if image is None:
             raise RuntimeError('Camera image could not be loaded for sample.')
 
+        image = np.array(image, copy=True)
         image = torch.from_numpy(image)
         if image.ndim == 2:
             image = image.unsqueeze(-1).repeat(1, 1, 3)

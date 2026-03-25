@@ -24,8 +24,15 @@ def eval(cfg: DictConfig) -> None:
     L.seed_everything(cfg.seed, workers=True)
 
     fusion_enabled = bool(OmegaConf.select(cfg, 'model.fusion.enabled', default=False))
+    radar_source = str(OmegaConf.select(cfg, 'radar_source', default='radar'))
+    radar_prioritize_recent = bool(OmegaConf.select(cfg, 'radar_prioritize_recent', default=True))
     
-    val_dataset = ViewOfDelft(data_root=cfg.data_root, split='val', include_camera=fusion_enabled)
+    val_dataset = ViewOfDelft(
+        data_root=cfg.data_root,
+        split='val',
+        radar_source=radar_source,
+        radar_prioritize_recent=radar_prioritize_recent,
+        include_camera=fusion_enabled)
     val_dataloader = DataLoader(val_dataset, 
                                 batch_size=1, 
                                 num_workers=cfg.num_workers, 

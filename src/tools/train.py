@@ -23,14 +23,32 @@ def train(cfg: DictConfig)-> None:
     L.seed_everything(cfg.seed, workers=True)
 
     fusion_enabled = bool(OmegaConf.select(cfg, 'model.fusion.enabled', default=False))
+    radar_source = str(OmegaConf.select(cfg, 'radar_source', default='radar'))
+    radar_prioritize_recent = bool(OmegaConf.select(cfg, 'radar_prioritize_recent', default=True))
+    temporal_max_num_points = OmegaConf.select(cfg, 'temporal_max_num_points', default=10)
     checkpoint_monitor = str(OmegaConf.select(cfg, 'checkpoint_monitor', default='validation/ROI/mAP'))
     checkpoint_mode = str(OmegaConf.select(cfg, 'checkpoint_mode', default='max'))
     eval_score_threshold = OmegaConf.select(cfg, 'eval_score_threshold', default=None)
     if eval_score_threshold is not None:
         cfg.model.head.test_cfg.score_threshold = float(eval_score_threshold)
+    if radar_source != 'radar' and temporal_max_num_points is not None:
+        cfg.model.pts_voxel_layer.max_num_points = int(temporal_max_num_points)
+        print(
+            f"[temporal-radar] radar_source={radar_source} -> "
+            f"pts_voxel_layer.max_num_points={int(temporal_max_num_points)}")
     
-    train_dataset = ViewOfDelft(data_root=cfg.data_root, split='train', include_camera=fusion_enabled)
-    val_dataset = ViewOfDelft(data_root=cfg.data_root, split='val', include_camera=fusion_enabled)
+    train_dataset = ViewOfDelft(
+        data_root=cfg.data_root,
+        split='train',
+        radar_source=radar_source,
+        radar_prioritize_recent=radar_prioritize_recent,
+        include_camera=fusion_enabled)
+    val_dataset = ViewOfDelft(
+        data_root=cfg.data_root,
+        split='val',
+        radar_source=radar_source,
+        radar_prioritize_recent=radar_prioritize_recent,
+        include_camera=fusion_enabled)
     
     train_dataloader = DataLoader(train_dataset, 
                                   batch_size=cfg.batch_size, 
