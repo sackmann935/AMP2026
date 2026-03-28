@@ -1,0 +1,307 @@
+config:
+  name: centerpoint_radar
+  exp_id: ablate_bev_res_016
+  data_root: data/view_of_delft
+  class_names:
+  - Car
+  - Pedestrian
+  - Cyclist
+  point_cloud_range:
+  - 0
+  - -25.6
+  - -3
+  - 51.2
+  - 25.6
+  - 2
+  voxel_size:
+  - 0.16
+  - 0.16
+  - 5
+  output_dir: outputs/ablate_bev_res_016
+  pts_voxel_layer:
+    max_num_points: 10
+    voxel_size:
+    - 0.16
+    - 0.16
+    - 5
+    point_cloud_range:
+    - 0
+    - -25.6
+    - -3
+    - 51.2
+    - 25.6
+    - 2
+    max_voxels:
+    - 18000
+    - 50000
+  voxel_encoder:
+    in_channels: 7
+    feat_channels:
+    - 64
+    with_distance: false
+    voxel_size:
+    - 0.16
+    - 0.16
+    - 5
+    point_cloud_range:
+    - 0
+    - -25.6
+    - -3
+    - 51.2
+    - 25.6
+    - 2
+    doppler_feature_aug: false
+    doppler_vr_index: 4
+    doppler_time_index: 6
+    doppler_add_abs: true
+    doppler_add_range_norm: true
+    doppler_add_time_interaction: true
+    doppler_range_eps: 0.01
+    recency_weighted_pooling: true
+    recency_time_index: 6
+    recency_beta: 2.0
+    recency_min_weight: 0.2
+    range_feature_aug: false
+    range_add_inverse: false
+    range_add_log: false
+    range_eps: 0.01
+    quality_weighted_pooling: false
+    quality_rcs_index: 3
+    quality_vr_index: 4
+    quality_time_index: 6
+    quality_bias: -1.2
+    quality_w_rcs: 1.0
+    quality_w_vr: 0.6
+    quality_w_time: 0.8
+    quality_w_range: 0.4
+    quality_min_weight: 0.1
+    quality_range_scale: 35.0
+  middle_encoder:
+    type: hard
+    in_channels: 64
+    output_shape:
+    - 320
+    - 320
+    sigma: 0.6
+    radius: 1
+    normalize: true
+    min_weight: 0.0
+    debug:
+      enabled: false
+      log_every_n_steps: 200
+      save_visualization: false
+      max_visualizations: 20
+      out_dir: outputs/ablate_bev_res_016/debug/soft_scatter
+      print_to_stdout: false
+  camera:
+    depth_num_bins: 16
+    depth_min: 1.0
+    depth_max: 60.0
+    lift_mode: expected
+    depth_topk: 3
+    chunk_size: 50000
+    sigma: 0.8
+    radius: 1
+    normalize: true
+    min_weight: 0.0
+    min_opacity: 0.05
+    use_depth_variance_sigma: false
+    sigma_beta: 0.5
+    sigma_min: 0.4
+    sigma_max: 1.6
+    base_channels: 32
+    debug:
+      enabled: false
+      log_memory: false
+  fusion:
+    enabled: false
+    type: concat_1x1
+    cmx_num_heads:
+    - 2
+    - 4
+    - 8
+    cmx_reduction: 1
+    radar_assist_num_heads:
+    - 2
+    - 4
+    - 8
+    radar_assist_scale: 0.25
+    radar_assist_uncertainty_temperature: 2.0
+    radar_assist_uncertainty_bias: 0.0
+    radar_assist_uncertainty_floor: 0.0
+    radar_assist_ratio_cap: 0.0
+    radar_assist_ratio_target: 0.6
+    radar_assist_ratio_reg_weight: 0.0
+    radar_assist_ratio_reg_power: 2.0
+  backbone:
+    in_channels: 64
+    layer_nums:
+    - 3
+    - 5
+    - 5
+    layer_strides:
+    - 2
+    - 2
+    - 2
+    out_channels:
+    - 64
+    - 128
+    - 256
+  neck:
+    in_channels:
+    - 64
+    - 128
+    - 256
+    upsample_strides:
+    - 1
+    - 2
+    - 4
+    out_channels:
+    - 128
+    - 128
+    - 128
+  head:
+    in_channels: 384
+    tasks:
+    - num_class: 1
+      class_names:
+      - Car
+    - num_class: 1
+      class_names:
+      - Pedestrian
+    - num_class: 1
+      class_names:
+      - Cyclist
+    common_heads:
+      reg:
+      - 2
+      - 2
+      height:
+      - 1
+      - 2
+      dim:
+      - 3
+      - 2
+      rot:
+      - 2
+      - 2
+      heatmap: null
+    share_conv_channel: 64
+    task_loss_weights:
+    - 1.0
+    - 1.0
+    - 1.0
+    bbox_coder:
+      pc_range:
+      - 0
+      - -25.6
+      - -3
+      - 51.2
+      - 25.6
+      - 2
+      post_center_range:
+      - -5
+      - -30.6
+      - -6
+      - 56.2
+      - 30.6
+      - 5
+      max_num: 350
+      score_threshold: 0.1
+      out_size_factor: 2
+      voxel_size:
+      - 0.16
+      - 0.16
+      code_size: 7
+    separate_head:
+      in_channels: 64
+      heads:
+        reg:
+        - 2
+        - 2
+        height:
+        - 1
+        - 2
+        dim:
+        - 3
+        - 2
+        rot:
+        - 2
+        - 2
+        heatmap:
+        - 1
+        - 2
+      init_bias: -2.19
+      final_kernel: 3
+    loss_cls:
+      reduction: mean
+      loss_weight: 1.0
+    loss_bbox:
+      reduction: mean
+      loss_weight: 0.25
+    norm_bbox: true
+    train_cfg:
+      grid_size:
+      - 320
+      - 320
+      - 1
+      point_cloud_range:
+      - 0
+      - -25.6
+      - -3
+      - 51.2
+      - 25.6
+      - 2
+      voxel_size:
+      - 0.16
+      - 0.16
+      - 5
+      out_size_factor: 2
+      dense_reg: 1
+      gaussian_overlap: 0.1
+      max_objs: 500
+      min_radius: 1
+      code_weights:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    test_cfg:
+      post_center_limit_range:
+      - -5
+      - -30.6
+      - -6
+      - 56.2
+      - 30.6
+      - 5
+      max_per_img: 500
+      max_pool_nms: false
+      min_radius:
+      - 4
+      - 0.3
+      - 0.85
+      score_threshold: 0.03
+      out_size_factor: 2
+      nms_type: circle
+      pre_max_size: 1000
+      post_max_size: 83
+      nms_thr: 0.2
+  regularization:
+    norm_mode: batchnorm
+    group_norm_groups: 16
+    freeze_bn:
+      enabled: true
+      freeze_epoch: 3
+      freeze_affine: false
+  optimizer:
+    lr: 0.001
+    weight_decay: 0.01
+    scheduler:
+      enabled: false
+      warmup_epochs: 1.0
+      warmup_steps: 0
+      min_lr_ratio: 0.05

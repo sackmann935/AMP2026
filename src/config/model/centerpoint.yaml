@@ -25,25 +25,6 @@ middle_encoder:
   in_channels: 64
   output_shape: [320, 320]
 
-camera:
-  depth_num_bins: 16
-  depth_min: 1.0
-  depth_max: 60.0
-  sigma: 0.8
-  radius: 1
-  normalize: TRUE
-  min_weight: 0.0
-  min_opacity: 0.05
-  base_channels: 32
-  debug:
-    enabled: FALSE
-
-fusion:
-  enabled: FALSE
-  type: concat_1x1 # ['none', 'add', 'concat_1x1', 'gated', 'cmx_lite']
-  cmx_num_heads: [2, 4, 8]
-  cmx_reduction: 1
-
 backbone: 
   in_channels: 64
   layer_nums: [3, 5, 5]
@@ -112,6 +93,26 @@ head:
     post_max_size: 83
     nms_thr: 0.2
 
+camera_rescue:
+  enabled: FALSE
+  ped_task_id: 1
+  topk: 200
+  score_threshold: 0.15
+  proposal_radius: 2
+  support_dilation: 2
+  depth_min: 1.0
+  depth_max: 80.0
+  image_heatmap_radius: 2
+  feat_channels: [32, 64, 96]
+  loss_weight_heatmap: 1.0
+  loss_weight_depth: 0.2
+  fusion_gate:
+    bias: -2.0
+    no_support_weight: 4.0
+    cam_conf_weight: 1.5
+    radar_uncertainty_weight: 1.0
+    camera_scale: 1.0
+
 
 regularization:
   norm_mode: batchnorm # [batchnorm, groupnorm]
@@ -127,6 +128,9 @@ optimizer:
   weight_decay: 0.01 
   scheduler:
     enabled: TRUE
-    warmup_epochs: 1.0
+    type: flat_step
+    warmup_epochs: 0.0
     warmup_steps: 0 # if >0, overrides warmup_epochs
-    min_lr_ratio: 0.05
+    milestones: [0.45, 0.70, 0.85]
+    gamma: 0.3
+    min_lr_ratio: 0.02

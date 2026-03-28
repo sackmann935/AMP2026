@@ -54,6 +54,16 @@ class ViewOfDelft(Dataset):
                  split = 'train',
                  radar_source='radar',
                  radar_prioritize_recent=True,
+                 radar_z_clip_enabled=False,
+                 radar_z_clip_min=-2.5,
+                 radar_z_clip_max=2.0,
+                 radar_z_jitter_std=0.0,
+                 radar_geo_aug_enabled=False,
+                 radar_geo_aug_flip_x_prob=0.0,
+                 radar_geo_aug_flip_y_prob=0.5,
+                 radar_geo_aug_rotation_deg=0.0,
+                 radar_geo_aug_scale_min=0.98,
+                 radar_geo_aug_scale_max=1.02,
                  include_camera=False,
                  image_mean=(0.485, 0.456, 0.406),
                  image_std=(0.229, 0.224, 0.225)):
@@ -74,6 +84,16 @@ class ViewOfDelft(Dataset):
         self.vod_kitti_locations = KittiLocations(root_dir = data_root)
         self.radar_source = self._normalize_radar_source(radar_source)
         self.radar_prioritize_recent = bool(radar_prioritize_recent)
+        self.radar_z_clip_enabled = bool(radar_z_clip_enabled)
+        self.radar_z_clip_min = float(radar_z_clip_min)
+        self.radar_z_clip_max = float(radar_z_clip_max)
+        self.radar_z_jitter_std = float(max(0.0, radar_z_jitter_std))
+        self.radar_geo_aug_enabled = bool(radar_geo_aug_enabled)
+        self.radar_geo_aug_flip_x_prob = float(np.clip(radar_geo_aug_flip_x_prob, 0.0, 1.0))
+        self.radar_geo_aug_flip_y_prob = float(np.clip(radar_geo_aug_flip_y_prob, 0.0, 1.0))
+        self.radar_geo_aug_rotation_deg = float(max(0.0, radar_geo_aug_rotation_deg))
+        self.radar_geo_aug_scale_min = float(radar_geo_aug_scale_min)
+        self.radar_geo_aug_scale_max = float(radar_geo_aug_scale_max)
         self._override_radar_dir()
 
     def __len__(self):
@@ -132,6 +152,18 @@ class ViewOfDelft(Dataset):
                 order = np.argsort(radar_data[:, 6], kind='stable')[::-1]
                 radar_data = radar_data[order]
 
+        if radar_data.ndim == 2 and radar_data.shape[1] >= 3 and radar_data.shape[0] > 0:
+            if self.split == 'train' and self.radar_z_jitter_std > 0.0:
+                radar_data[:, 2] = radar_data[:, 2] + np.random.normal(
+                    loc=0.0,
+                    scale=self.radar_z_jitter_std,
+                    size=radar_data.shape[0]).astype(np.float32)
+            if self.radar_z_clip_enabled:
+                radar_data[:, 2] = np.clip(
+                    radar_data[:, 2],
+                    self.radar_z_clip_min,
+                    self.radar_z_clip_max)
+
         
         gt_labels_3d_list = []
         gt_bboxes_3d_list = []
@@ -155,15 +187,18 @@ class ViewOfDelft(Dataset):
                 
                     gt_bboxes_3d_list.append(np.concatenate([bbox3d_locs, bbox3d_dims, bbox3d_rot], axis=0))
 
-        radar_data = torch.from_numpy(np.ascontiguousarray(radar_data)).to(torch.float32)
-        
         if gt_bboxes_3d_list == []:
             gt_labels_3d = np.zeros((0,), dtype=np.int64)
             gt_bboxes_3d = np.zeros((0, 7), dtype=np.float32)
         else:
             gt_labels_3d = np.array(gt_labels_3d_list, dtype=np.int64)
             gt_bboxes_3d = np.stack(gt_bboxes_3d_list, axis=0)
-        
+
+        if self.split == 'train' and self.radar_geo_aug_enabled:
+            radar_data, gt_bboxes_3d = self._apply_radar_geo_aug(radar_data, gt_bboxes_3d)
+
+        radar_data = torch.from_numpy(np.ascontiguousarray(radar_data)).to(torch.float32)
+
         gt_bboxes_3d = LiDARInstance3DBoxes(
             gt_bboxes_3d,
             box_dim=gt_bboxes_3d.shape[-1],
@@ -208,6 +243,58 @@ class ViewOfDelft(Dataset):
             'camera_projection': camera_projection,
             't_lidar_camera': t_lidar_camera,
         }
+
+    @staticmethod
+    def _wrap_to_pi(angle):
+        return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
+    def _apply_radar_geo_aug(self, radar_data, gt_bboxes_3d):
+        if isinstance(radar_data, torch.Tensor):
+            radar_data = radar_data.detach().cpu().numpy()
+        if radar_data.ndim != 2 or radar_data.shape[0] == 0 or radar_data.shape[1] < 3:
+            return radar_data, gt_bboxes_3d
+
+        boxes = gt_bboxes_3d.copy()
+        points = radar_data.copy()
+
+        scale_min = self.radar_geo_aug_scale_min
+        scale_max = self.radar_geo_aug_scale_max
+        if scale_max < scale_min:
+            scale_min, scale_max = scale_max, scale_min
+        if scale_max > 0.0 and scale_max > scale_min:
+            scale = float(np.random.uniform(scale_min, scale_max))
+            points[:, :3] *= scale
+            if boxes.shape[0] > 0:
+                boxes[:, :6] *= scale
+
+        rot_deg = self.radar_geo_aug_rotation_deg
+        if rot_deg > 0.0:
+            angle = float(np.deg2rad(np.random.uniform(-rot_deg, rot_deg)))
+            sin_a, cos_a = np.sin(angle), np.cos(angle)
+            x = points[:, 0].copy()
+            y = points[:, 1].copy()
+            points[:, 0] = cos_a * x - sin_a * y
+            points[:, 1] = sin_a * x + cos_a * y
+            if boxes.shape[0] > 0:
+                bx = boxes[:, 0].copy()
+                by = boxes[:, 1].copy()
+                boxes[:, 0] = cos_a * bx - sin_a * by
+                boxes[:, 1] = sin_a * bx + cos_a * by
+                boxes[:, 6] = self._wrap_to_pi(boxes[:, 6] - angle)
+
+        if np.random.rand() < self.radar_geo_aug_flip_x_prob:
+            points[:, 0] = -points[:, 0]
+            if boxes.shape[0] > 0:
+                boxes[:, 0] = -boxes[:, 0]
+                boxes[:, 6] = self._wrap_to_pi(-boxes[:, 6])
+
+        if np.random.rand() < self.radar_geo_aug_flip_y_prob:
+            points[:, 1] = -points[:, 1]
+            if boxes.shape[0] > 0:
+                boxes[:, 1] = -boxes[:, 1]
+                boxes[:, 6] = self._wrap_to_pi(-boxes[:, 6] - np.pi)
+
+        return points.astype(np.float32, copy=False), boxes.astype(np.float32, copy=False)
     
 
         

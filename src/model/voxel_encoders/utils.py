@@ -133,7 +133,7 @@ class PFNLayer(nn.Module):
         assert mode in ['max', 'avg']
         self.mode = mode
 
-    def forward(self, inputs, num_voxels=None, aligned_distance=None):
+    def forward(self, inputs, num_voxels=None, aligned_distance=None, point_weights=None):
         """Forward function.
 
         Args:
@@ -152,6 +152,8 @@ class PFNLayer(nn.Module):
         x = self.norm(x.permute(0, 2, 1).contiguous()).permute(0, 2,
                                                                1).contiguous()
         x = F.relu(x)
+        if point_weights is not None:
+            x = x.mul(point_weights.unsqueeze(-1))
 
         if self.mode == 'max':
             if aligned_distance is not None:
@@ -160,9 +162,13 @@ class PFNLayer(nn.Module):
         elif self.mode == 'avg':
             if aligned_distance is not None:
                 x = x.mul(aligned_distance.unsqueeze(-1))
-            x_max = x.sum(
-                dim=1, keepdim=True) / num_voxels.type_as(inputs).view(
-                    -1, 1, 1)
+            if point_weights is not None:
+                denom = point_weights.sum(dim=1, keepdim=True).type_as(inputs).unsqueeze(-1).clamp(min=1e-6)
+                x_max = x.sum(dim=1, keepdim=True) / denom
+            else:
+                x_max = x.sum(
+                    dim=1, keepdim=True) / num_voxels.type_as(inputs).view(
+                        -1, 1, 1)
 
         if self.last_vfe:
             return x_max

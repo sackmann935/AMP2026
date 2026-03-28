@@ -1,0 +1,2 @@
+epoch,step,validation/fusion/drop_camera,validation/fusion/drop_radar,validation/loss,validation/task0.loss_bbox,validation/task0.loss_heatmap,validation/task1.loss_bbox,validation/task1.loss_heatmap,validation/task2.loss_bbox,validation/task2.loss_heatmap
+0,0,0.0,0.0,1.6093021631240845,0.0,0.7826453447341919,0.0,0.7026864290237427,0.0,0.12396933883428574

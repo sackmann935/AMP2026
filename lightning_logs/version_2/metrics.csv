@@ -1,0 +1,2 @@
+epoch,step,validation/loss,validation/task0.loss_bbox,validation/task0.loss_heatmap,validation/task1.loss_bbox,validation/task1.loss_heatmap,validation/task2.loss_bbox,validation/task2.loss_heatmap
+0,0,3.98848819732666,0.0,2.009788990020752,0.0,1.5735892057418823,0.0,0.4051041603088379

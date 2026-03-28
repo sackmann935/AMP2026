@@ -16,9 +16,40 @@ pts_voxel_layer:
 voxel_encoder:
   in_channels: 7
   feat_channels: [64]
+  extra_feat_channels: []
   with_distance: FALSE
   voxel_size: ${model.voxel_size}
   point_cloud_range: ${model.point_cloud_range}
+  doppler_feature_aug: FALSE
+  doppler_vr_index: 4
+  doppler_time_index: 6
+  doppler_add_abs: TRUE
+  doppler_add_range_norm: TRUE
+  doppler_add_time_interaction: TRUE
+  doppler_range_eps: 0.01
+  recency_weighted_pooling: FALSE
+  recency_time_index: 6
+  recency_beta: 2.0
+  recency_min_weight: 0.2
+  range_feature_aug: FALSE
+  range_add_inverse: FALSE
+  range_add_log: FALSE
+  range_eps: 0.01
+  feature_scale_norm_enabled: FALSE
+  feature_scale_norm_include_distance: TRUE
+  feature_scale_norm_eps: 0.001
+  feature_scale_norm_clip: 5.0
+  quality_weighted_pooling: FALSE
+  quality_rcs_index: 3
+  quality_vr_index: 4
+  quality_time_index: 6
+  quality_bias: -1.2
+  quality_w_rcs: 1.0
+  quality_w_vr: 0.6
+  quality_w_time: 0.8
+  quality_w_range: 0.4
+  quality_min_weight: 0.1
+  quality_range_scale: 35.0
 
 middle_encoder:
   type: gaussian_soft # ['hard', 'gaussian_soft']
@@ -35,33 +66,6 @@ middle_encoder:
     max_visualizations: 20
     out_dir: ${output_dir}/debug/soft_scatter
     print_to_stdout: FALSE
-
-camera:
-  depth_num_bins: 16
-  depth_min: 1.0
-  depth_max: 60.0
-  lift_mode: expected # ['expected', 'naive_dense', 'topk_chunked']
-  depth_topk: 3
-  chunk_size: 50000
-  sigma: 0.8
-  radius: 1
-  normalize: TRUE
-  min_weight: 0.0
-  min_opacity: 0.05
-  use_depth_variance_sigma: FALSE
-  sigma_beta: 0.5
-  sigma_min: 0.4
-  sigma_max: 1.6
-  base_channels: 32
-  debug:
-    enabled: FALSE
-    log_memory: FALSE
-
-fusion:
-  enabled: FALSE
-  type: concat_1x1 # ['none', 'add', 'concat_1x1', 'gated', 'cmx_lite']
-  cmx_num_heads: [2, 4, 8]
-  cmx_reduction: 1
 
 backbone:
   in_channels: 64
@@ -88,6 +92,7 @@ head:
     rot: [2, 2] # no need vel
     heatmap: ~
   share_conv_channel: 64
+  task_loss_weights: [1.0, 1.0, 1.0]
   bbox_coder:
     pc_range: ${model.point_cloud_range}
     post_center_range: [-5, -30.6, -6, 56.2, 30.6, 5]
@@ -130,6 +135,26 @@ head:
     post_max_size: 83
     nms_thr: 0.2
 
+camera_rescue:
+  enabled: FALSE
+  ped_task_id: 1
+  topk: 200
+  score_threshold: 0.15
+  proposal_radius: 2
+  support_dilation: 2
+  depth_min: 1.0
+  depth_max: 80.0
+  image_heatmap_radius: 2
+  feat_channels: [32, 64, 96]
+  loss_weight_heatmap: 1.0
+  loss_weight_depth: 0.2
+  fusion_gate:
+    bias: -2.0
+    no_support_weight: 4.0
+    cam_conf_weight: 1.5
+    radar_uncertainty_weight: 1.0
+    camera_scale: 1.0
+
 
 regularization:
   norm_mode: batchnorm # [batchnorm, groupnorm]
@@ -145,6 +170,9 @@ optimizer:
   weight_decay: 0.01
   scheduler:
     enabled: TRUE
-    warmup_epochs: 1.0
+    type: flat_step
+    warmup_epochs: 0.0
     warmup_steps: 0 # if >0, overrides warmup_epochs
-    min_lr_ratio: 0.05
+    milestones: [0.45, 0.70, 0.85]
+    gamma: 0.3
+    min_lr_ratio: 0.02

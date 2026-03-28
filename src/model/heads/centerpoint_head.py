@@ -6,6 +6,7 @@ import os.path as osp
 import torch
 from torch import Tensor, nn
 from torch.nn import Conv2d
+from omegaconf import ListConfig
 
 
 from ..bricks.conv_module import ConvModule
@@ -146,6 +147,7 @@ class CenterHead(nn.Module):
                  num_heatmap_convs: int = 2,
                  bias: str = 'auto',
                  norm_bbox: bool = True,
+                 task_loss_weights: Optional[List[float]] = None,
                  train_cfg: Optional[dict] = None,
                  test_cfg: Optional[dict] = None):
         super().__init__()
@@ -158,6 +160,15 @@ class CenterHead(nn.Module):
         self.in_channels = in_channels
         self.num_classes = num_classes
         self.norm_bbox = norm_bbox
+        if task_loss_weights is None:
+            self.task_loss_weights = [1.0] * len(num_classes)
+        else:
+            weights = [float(w) for w in task_loss_weights]
+            if not weights:
+                weights = [1.0] * len(num_classes)
+            if len(weights) < len(num_classes):
+                weights = weights + [weights[-1]] * (len(num_classes) - len(weights))
+            self.task_loss_weights = weights[:len(num_classes)]
 
         self.loss_cls = GaussianFocalLoss(**loss_cls)
         self.loss_bbox = L1Loss(**loss_bbox)
@@ -212,6 +223,40 @@ class CenterHead(nn.Module):
             tuple(list[dict]): Output results for tasks.
         """
         return multi_apply(self.forward_single, feats)
+
+    def _resolve_train_min_radius(self, task_id: int, cls_id: int) -> int:
+        """Return train-time min Gaussian radius for a task/class.
+
+        Supported formats for ``train_cfg.min_radius``:
+        - scalar: shared across all tasks/classes
+        - list[task]: one value per task (current radar setup uses one class/task)
+        - list[list[class]]: per-task, per-class
+        """
+        min_radius_cfg = self.train_cfg['min_radius']
+        if isinstance(min_radius_cfg, Tensor):
+            if min_radius_cfg.numel() == 1:
+                return int(min_radius_cfg.item())
+            min_radius_cfg = min_radius_cfg.tolist()
+        if isinstance(min_radius_cfg, ListConfig):
+            min_radius_cfg = list(min_radius_cfg)
+
+        if isinstance(min_radius_cfg, (list, tuple)):
+            if len(min_radius_cfg) == 0:
+                return 0
+            task_value = min_radius_cfg[min(task_id, len(min_radius_cfg) - 1)]
+            if isinstance(task_value, Tensor):
+                if task_value.numel() == 1:
+                    return int(task_value.item())
+                task_value = task_value.tolist()
+            if isinstance(task_value, ListConfig):
+                task_value = list(task_value)
+            if isinstance(task_value, (list, tuple)):
+                if len(task_value) == 0:
+                    return 0
+                return int(task_value[min(cls_id, len(task_value) - 1)])
+            return int(task_value)
+
+        return int(min_radius_cfg)
 
     def _gather_feat(self, feat, ind, mask=None):
         """Gather feature map.
@@ -347,6 +392,7 @@ class CenterHead(nn.Module):
 
             for k in range(num_objs):
                 cls_id = task_classes[idx][k]
+                cls_idx = int(cls_id.item()) if isinstance(cls_id, Tensor) else int(cls_id)
                 width = task_boxes[idx][k][3]
                 length = task_boxes[idx][k][4]
                 width = width / voxel_size[0] / self.train_cfg['out_size_factor']
@@ -354,7 +400,7 @@ class CenterHead(nn.Module):
 
                 if width > 0 and length > 0:
                     radius = gaussian_radius((length, width), min_overlap=self.train_cfg['gaussian_overlap'])
-                    radius = max(self.train_cfg['min_radius'], int(radius))
+                    radius = max(self._resolve_train_min_radius(idx, cls_idx), int(radius))
 
                     # be really careful for the coordinate system of
                     # your box annotation.
@@ -374,7 +420,7 @@ class CenterHead(nn.Module):
                             and 0 <= center_int[1] < feature_map_size[1]):
                         continue
 
-                    draw_gaussian(heatmap[cls_id], center_int, radius)
+                    draw_gaussian(heatmap[cls_idx], center_int, radius)
 
                     new_idx = k
                     x, y = center_int[0], center_int[1]
@@ -457,6 +503,10 @@ class CenterHead(nn.Module):
             target_box = target_box.cuda()
             loss_bbox = self.loss_bbox(
                 pred, target_box, bbox_weights, avg_factor=(num + 1e-4))
+            task_weight = float(self.task_loss_weights[task_id])
+            if task_weight != 1.0:
+                loss_heatmap = loss_heatmap * task_weight
+                loss_bbox = loss_bbox * task_weight
             loss_dict[f'task{task_id}.loss_heatmap'] = loss_heatmap
             loss_dict[f'task{task_id}.loss_bbox'] = loss_bbox
         return loss_dict

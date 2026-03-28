@@ -10,11 +10,8 @@ set -euo pipefail
 #   bash src/tools/smoke_train.sh
 #   bash src/tools/smoke_train.sh hard
 #   SMOKE_BATCHES=4 SMOKE_BATCH_SIZE=2 bash src/tools/smoke_train.sh gaussian_soft
-#   bash src/tools/smoke_train.sh gaussian_soft cmx_lite
-#   bash src/tools/smoke_train.sh hard off
 
 MIDDLE_ENCODER_TYPE="${1:-}" # optional: hard | gaussian_soft
-FUSION_TYPE="${2:-}"         # optional: off | add | concat_1x1 | gated | cmx_lite
 
 SMOKE_BATCHES="${SMOKE_BATCHES:-2}"
 SMOKE_BATCH_SIZE="${SMOKE_BATCH_SIZE:-1}"
@@ -27,7 +24,6 @@ export SMOKE_BATCH_SIZE
 export SMOKE_NUM_WORKERS
 export SMOKE_SUBSET_SIZE
 export SMOKE_SEED
-export FUSION_TYPE
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -38,7 +34,6 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 echo "[smoke] repo root: ${REPO_ROOT}"
 echo "[smoke] python: ${PYTHON_BIN}"
 echo "[smoke] middle_encoder.type override: ${MIDDLE_ENCODER_TYPE:-<none>}"
-echo "[smoke] fusion.type override: ${FUSION_TYPE:-<none>}"
 echo "[smoke] batches=${SMOKE_BATCHES}, batch_size=${SMOKE_BATCH_SIZE}, workers=${SMOKE_NUM_WORKERS}, subset=${SMOKE_SUBSET_SIZE}"
 
 "${PYTHON_BIN}" - <<'PY'
@@ -48,13 +43,13 @@ from pathlib import Path
 import lightning as L
 import torch
 from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, Subset
 
 from src.dataset import ViewOfDelft, collate_vod_batch
 from src.model.detector import CenterPoint
 
 middle_encoder_type = os.environ.get("MIDDLE_ENCODER_TYPE", "").strip()
-fusion_type = os.environ.get("FUSION_TYPE", "").strip()
 smoke_batches = int(os.environ.get("SMOKE_BATCHES", "2"))
 smoke_batch_size = int(os.environ.get("SMOKE_BATCH_SIZE", "1"))
 smoke_num_workers = int(os.environ.get("SMOKE_NUM_WORKERS", "0"))
@@ -73,21 +68,15 @@ with initialize_config_dir(version_base=None, config_dir=config_dir):
 
 if middle_encoder_type:
     cfg.model.middle_encoder.type = middle_encoder_type
-if fusion_type:
-    if fusion_type.lower() in {"off", "false", "0", "disabled"}:
-        cfg.model.fusion.enabled = False
-    else:
-        cfg.model.fusion.enabled = True
-        cfg.model.fusion.type = fusion_type
 
 cfg.batch_size = smoke_batch_size
 cfg.num_workers = smoke_num_workers
-fusion_enabled = bool(getattr(getattr(cfg.model, "fusion", {}), "enabled", False))
+camera_rescue_enabled = bool(OmegaConf.select(cfg, "model.camera_rescue.enabled", default=False))
 
 train_dataset = ViewOfDelft(
     data_root=cfg.data_root,
     split="train",
-    include_camera=fusion_enabled,
+    include_camera=camera_rescue_enabled,
 )
 subset_len = min(smoke_subset_size, len(train_dataset))
 train_subset = Subset(train_dataset, range(subset_len))
